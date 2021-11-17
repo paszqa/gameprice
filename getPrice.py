@@ -1,26 +1,45 @@
-# This Python file uses the following encoding: utf-8
-import requests
-from bs4 import BeautifulSoup
-import os
-import sys
-pathToScript = '/home/pi/gameprice/'
+#Count execution time
+from datetime import datetime
+startTime = datetime.now()
 
+#Imports
+import requests #Downloading site
+from bs4 import BeautifulSoup #Searching on site
+import os #OS operations
+import sys #OS operations
+import subprocess #Running shell scripts
+from difflib import SequenceMatcher #Comparing strings
+from PIL import Image, ImageDraw, ImageFont, ImageFilter #Image generation
+from io import BytesIO #Downloading an image from URL
+
+#Basic vars
+pathToScript = '/home/pi/gameprice/'
+prettyName = ""
+
+#Functions
 def getElementFromSite(site, elementName, elementAttributeName, elementAttribute):
-    #print("Getting "+elementName+"/"+elementAttributeName+"/"+elementAttribute+" from site: "+site)
     r = requests.get(site, allow_redirects=True)
     f = open(pathToScript+'temp.html', 'w+')
     f.write(str(r.content))
     f.close()
     html = open(pathToScript+'temp.html', encoding="utf8", errors='ignore')
     soup = BeautifulSoup(html, 'html.parser')
-    #lines = soup.find_all("span", {"class" : "numeric"}) #"game-price-current"})
-    #lines = soup.find_all("a", {"class" : "game-price-anchor-link"})
     lines = soup.find_all(elementName, { elementAttributeName : elementAttribute})
-    #print("-------------")
-    #print(str(site))
-    #print(str(lines))
-    #print("=============")
     return lines
+
+def getPrettyName(site):
+    #print("Getting pretty name")
+    r = requests.get(site, allow_redirects=True)
+    f = open(pathToScript+'prettyname.html','w+')
+    f.write(str(r.content).replace("\\n","\n").replace("\\t",""))
+    f.close()
+    html = open(pathToScript+'prettyname.html', encoding="utf8", errors='ignore')
+    soup = BeautifulSoup(html, 'html.parser')
+    lines = soup.find_all("h1")
+    for line in lines:
+#        if "<h1>" in lne:
+        return (str(line).replace("<h1>Buy ","").replace(" PC</h1>","").replace("\\",""))
+
 
 def checkGamePass(inputLines):
     if len(inputLines) > 0:
@@ -29,17 +48,38 @@ def checkGamePass(inputLines):
             if "Included with Xbox Game Pass for PC" in str(line):
                 gamePass = 1
         if gamePass == 1:
-            print("Available in GamePass PC")
+            return "GamePassPC;yes"
         else:
-            print("Not in GamePass PC")
+            return "GamePassPC;no"
     else:
-        print("Not in GamePass PC")
+        return "GamePassPC;no"
+
+def checkGeforceNow(gameName):
+    #print("checking gfnow...")
+    #print("GAME:"+str(gameName))
+    gameName = str(gameName).lower().replace(":","").replace("-"," ").replace("'","")
+    inputLines=str(subprocess.check_output("curl -s https://static.nvidiagrid.net/supported-public-game-list/locales/gfnpc-en-US.json|jq '.[] .title'|tr -d '\"' ", shell=True)).split("\\n")
+    bestMatch = ""
+    bestRatio = 0
+    for line in inputLines:
+        line = line.replace("\\xc2","").replace("\\x84","").replace("\\xa2","").replace("\\xe2","").replace("\\xae","").replace("\\x80","").replace("\\x99","").replace("'","").lower()
+        #print("GAME:"+gameName)
+        #print("LINE:"+line)
+        s1 = SequenceMatcher(None, gameName, line)
+        if s1.ratio() > bestRatio:
+            bestMatch = line
+            bestRatio = s1.ratio()
+        #if gameName in line:
+        #    print(line+"-----")
+    if bestRatio > 0.93:
+        return "yes"
+    else:
+        return "no"
+    #print(str(bestMatch)+" /// "+str(bestRatio))
 
 def printPrices(currentName, inputLines, siteurl):
-    #print("---inputLines: "+str(inputLines[:3]))
     if len(inputLines) > 0:
-        #print("RAW:\n\n"+str(inputLines)+"\n\n##########################################\n\n")
-        inputLines = str(inputLines[:10]).replace('</a>','\n')#.replace('</span></a>','\n').replace("<span class=\"numeric\">","\n").replace("[","").replace("]","").replace("</span>","")
+        inputLines = str(inputLines[:10]).replace('</a>','\n')
         inputLines = inputLines.split("\n")
         #Get official price
         officialPrice = "-"
@@ -48,8 +88,6 @@ def printPrices(currentName, inputLines, siteurl):
         gamePass = 0
         historicalLow = "1000000000"
         #Find first line with price
-        #print(str(inputLines)
-        #print("//////////////////////////////////////////////////////////////")
         x=0
         ofiNotFound = 1
         keyNotFound = 1
@@ -63,18 +101,17 @@ def printPrices(currentName, inputLines, siteurl):
                 keyNotFound = 0
             elif "empty" in str(line) and "histor" in str(line) and hisNotFound == 1:
                 historicalLow = "Unavailable"
-                #hisNotFound = 0
             elif "official" in str(line) and "numeric" in str(line) and ofiNotFound == 1:
                 #Cut off everything before 'numerical' and after next SLASH
-                #print("OFII:"+str(line))
-                officialPrice = str(line).split('<span class="numeric">')[1].split("\\")[0]
+                if "Free" in str(line):
+                    officialPrice = "Free"
+                else:
+                    officialPrice = str(line).split('<span class="numeric">')[1].split("\\")[0]
                 ofiNotFound = 0
             elif "keyshop" in str(line) and "numeric" in str(line) and keyNotFound == 1:
-                #print("KS::"+str(line))
                 keyshopPrice = str(line).split('<span class="numeric">')[1].split("\\")[0]
                 keyNotFound = 0
             elif "histor" in str(line) and "numeric" in str(line) and hisNotFound != 0:
-                #print("HISTOR:"+str(line))
                 newCandidate = str(line).split('<span class="numeric">')[1].split("\\")[0]
                 if "Free" not in str(newCandidate) and "Free" not in str(historicalLow):
                     if float(newCandidate.replace(",",".").replace("~","")) < float(historicalLow.replace(",",".").replace("~","")):
@@ -82,47 +119,14 @@ def printPrices(currentName, inputLines, siteurl):
                 else:
                     historicalLow = "Free"
                 hisNotFound -= 1
-#            elif "Included with Xbox Game Pass for PC" in str(line):
-#                gamePass = 1
             x+=1
-        #print("-------------------------------------")
-        
-        #
-        #if "UNAVAILABLE" in inputLines[0]:
-        #    print("X100:Found UNAVAILABLE IN:\n"+inputLines[0]+"\n")
-        #    officialPrice = "n/a"
-        #else:
-        #    print("X101: Not found UNAVAILABLE IN:\n"+inputLines[0]+"\n")
-        #    officialPrice = inputLines[1].split("\")[0]+""
-        #    foundOfficial = 1
-        #If found official price
-        #if foundOfficial == 1:
-        #    print("\nX200:Found Official = 1; keyshopSearchIndex = 2;\n")
-        #    keyshopSearchIndex = 2 
-        #else:
-        #    print("\nX201:Found Official = 0; keyshopSearchIndex = 1;\n")
-        #    keyshopSearchIndex = 2
-#
-        #if "UNAVAILABLE" in inputLines[keyshopSearchIndex]:
-        #    print("\nX300:Found UNAVAILABLE in inputLines["+str(keyshopSearchIndex)+"]:\n"+str(inputLines[keyshopSearchIndex]))
-        #    keyshopPrice = "n/a"
-        #else:
-        #    print("\nX301:Not found UNAVAILABLE in inputLines["+str(keyshopSearchIndex)+"]:"+str(inputLines[keyshopSearchIndex]))
-        #    keyshopPrice = str(inputLines[keyshopSearchIndex].split("\\")[0])+"€"
-
-        #print("X400: OFI:\n"+officialPrice+"\n\n")
-        #print("X401: KEYSH:\n"+keyshopPrice+"\n\n")
-        #print("X402: HIST:\n"+historicalLow+"\n\n")
-        #print("=1=1=1=1=1=1==1=1=1=1==1=1==1=1=1=1")
-        #print(inputLines[0])
-        #print("=2=2==2=2=2=2=2=2==2=2=2=2==2=2==2=2")
-        #print(inputLines[1])
-        #print("=3=3=3=3==3=3=3=3=3==3=3=3=3==3=3=3=")
-        #if len(inputLines) > 2:
-        #    print(inputLines[2])
-        #print("=4=4=4==4=4=4=4=4=4==4=4=4==4=4==4=4=")
-        print("Game: "+currentName)
-        print("<"+siteurl+">")
+        #-----------FINAL PRINT PART 1----------------
+        csv = open(pathToScript+"result.csv",'w+')
+        getPrettyName(siteurl)
+        csv.write("Game;"+currentName+"\n")
+        csv.write(""+siteurl+"\n")
+        #print("Game;"+currentName)
+        #print(""+siteurl+"")
         if officialPrice != "Unavailable" and "Free" not in str(officialPrice):
             officialPrice += "€"
         if keyshopPrice != "Unavailable":
@@ -135,30 +139,22 @@ def printPrices(currentName, inputLines, siteurl):
                 historicalLow = "Free"
         if historicalLow != "Unavailable" and "Free" not in str(historicalLow):
             historicalLow += "€"
-        print("Official: "+str(officialPrice))
-        print("Keyshops: "+str(keyshopPrice))
-        print("Historical low: "+str(historicalLow))
-        checkGamePass(getElementFromSite(siteurl, "span", "class", "game-info-title title no-icons"))
-#        if gamePass == 1:
-#            print("Available in GamePass.")
-#        else:
-#            print("Not in GamePass.")
-        #getImageUrl(siteurl)
-        #if len(inputLines) > 1:
-        #    print("Official: "+str(inputLines[1].split("\\")[0])+"€")
-        #if len(inputLines) > 2:
-        #    print("Keyshops: "+str(inputLines[2].split("\\")[0])+"€")
-        #if len(inputLines) > 3:
-        #    print("Historical low: "+str(inputLines[3].split("\\")[0])+"€")
-        getImageUrl(siteurl)
+        #-----------FINAL PRINT PART 2--------------
+        csv.write("Official;"+str(officialPrice)+"\n")
+        csv.write("Keyshops;"+str(keyshopPrice)+"\n")
+        csv.write("Historical;"+str(historicalLow)+"\n")
+        #print("Official;"+str(officialPrice))
+        #print("Keyshops;"+str(keyshopPrice))
+        #print("Historical;"+str(historicalLow))
+        csv.write(checkGamePass(getElementFromSite(siteurl, "span", "class", "game-info-title title no-icons"))+"\n")
+        #csv.write("GeforceNOW;???"+"\n")
+        csv.write("GeforceNOW;"+str(checkGeforceNow(currentName))+"\n")#static.nvidiagrid.net/supported-public-game-list/locales/gfnpc-en-US.json", "span", "class", "game-name"))
+        csv.write(getImageUrl(siteurl))
         return 0
     else:
-        #print(str(inputLines))
-        #print("Error - not enough lines:\n"+str(inputLines))
         return 1
 
 def getSimilarName(inputName):
-    #print("Game not found, searching for a similar game")
     gameName=fixName(inputName)
     gameName = inputName.replace(" - ","-").replace("---","-").replace("-","+")
     siteurl='https://gg.deals/games/?title='+gameName
@@ -168,34 +164,24 @@ def getSimilarName(inputName):
     f.close()
     html = open(pathToScript+'temp.html', encoding="utf8", errors='ignore')
     soup = BeautifulSoup(html, 'html.parser')
-    lines = soup.find_all("a", {"class" : "title-inner"})#"game-info-title title"})
+    lines = soup.find_all("a", {"class" : "title-inner"})
     lines = str(lines).replace("<div","\n")
     lines = lines.split(">")[1].split("<")[0]
-    print("Exact game name not found, similar name: "+lines)
+    #print("Exact game name not found, similar name: "+lines)
+    returnArray = []
+    returnArray.append(lines)
     lines = soup.find_all("a", {"class" : "full-link"})
     lines = str(lines).replace("</a>","\n").replace('<a class="full-link" href="','').split("\n")[0].split("/")[2]
-    #print(str(lines))
-    
-    #print("-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=")
-    return lines
+    returnArray.append(lines)
+    return returnArray
 
 def buildSiteUrl(inputName):
-#    gameName=sys.argv[1]
-    #print("Input name: "+str(inputName))
-    gameName=fixName(inputName)#str(inputName).replace(" - ","-")
-    #gameName=gameName.replace(" and ","")
-    #gameName=gameName.replace("&","")
-    #gameName=gameName.replace("'","-")
-    #print("Input name2: "+str(inputName))
-    #gameName=str(inputName).replace(" ","-").replace("---","-")
-    #gameName=str(gameName).replace(":","").replace("/","").replace("+","")
-    #print("Game name: "+str(gameName))
+    gameName=fixName(inputName)
     siteurl='https://gg.deals/eu/region/switch/?return=%2Fgame%2F'+str(gameName)+'%2F&showKeyshops=1'
-    #print("Site URL: "+siteurl)
     return siteurl
 
 def fixName(inputName):
-    #print("A:"+str(inputName))
+
     gameName=str(inputName).replace(" - ","-")
     gameName=gameName.replace(" and ","")
     gameName=gameName.replace("&amp;","").replace("  "," ")
@@ -204,16 +190,15 @@ def fixName(inputName):
     gameName=str(gameName).replace(" ","-").replace("---","-").replace("   "," ").replace("  "," ").replace("  "," ")
     gameName=str(gameName).replace(":","").replace("/","").replace("+","")
     gameName=gameName.replace("&&amp;","").replace("  "," ")
-    #print("B:"+str(gameName))
+
     return gameName
 
 def getImageUrl(siteurl):
     r = requests.get(siteurl, allow_redirects=True)
     lines = str(r.content).split("<")
-    #print(siteurl)
     for line in lines:
         if "image-game" in str(line):
-            print(str(line).split("src=")[1].split(" alt=")[0].replace('"',''))
+            return (str(line).split("src=")[1].split(" alt=")[0].replace('"',''))
             break;
         if "game-link-widget" in str(line):
             redirectLink = str(line).split('href="')[1].replace('">','')
@@ -221,65 +206,120 @@ def getImageUrl(siteurl):
             targetUrl = str(redirectRequest.url)
             if "steampowered" in targetUrl:
                 appId = str(targetUrl).split("/")[-2]
-                print("https://steamcdn-a.akamaihd.net/steam/apps/"+appId+"/capsule_231x87.jpg")
+                return "https://steamcdn-a.akamaihd.net/steam/apps/"+appId+"/capsule_231x87.jpg"
                 break;
-        #if "steam" in str(line) or "Steam" in str(line):
-        #    print(str(line))
         if "store.steampowered.com/app" in str(line):
-            #print(str(line))
             appId= str(line).split("/")[-2]
-            print("https://steamcdn-a.akamaihd.net/steam/apps/"+appId+"/capsule_231x87.jpg")
+            return "https://steamcdn-a.akamaihd.net/steam/apps/"+appId+"/capsule_231x87.jpg"
             break;
-        #else:
-            #print(str(line))
 
-#htmlname='site.html'
-#print("------------")
+def generateImage(siteurl):
+    #Read data file and convert to array
+    dataFile = open(pathToScript+"result.csv", "r")
+    line = dataFile.readlines()
+    #Get file contents to easily readable variables
+    gameName = str(line[0]).split(";")[1]
+    prettyName = getPrettyName(siteurl)
+    ggUrl = str(line[1])
+    ofi = str(line[2]).split(";")[1]
+    key = line[3].split(";")[1]
+    his = line[4].split(";")[1]
+    gamepass = line[5].split(";")[1].replace("\n","")
+    gfnow = line[6].split(";")[1].replace("\n","")
+    imgUrl = line[7]
+    dataFile.close()
+    #Setup base of image
+    img = Image.open(pathToScript+'bg600x200.png')
+    img = img.convert("RGB")
+    imgDraw = ImageDraw.Draw(img,'RGBA')
+    #Set fonts
+    mainfont = ImageFont.truetype(pathToScript+"ShareTechMono-Regular.ttf", 16)
+    smallfont = ImageFont.truetype(pathToScript+"ShareTechMono-Regular.ttf", 11)
+    bigfont = ImageFont.truetype(pathToScript+"ShareTechMono-Regular.ttf", 20)
+    #Get game image from URL and paste it
+    response = requests.get(imgUrl)
+    imageToPaste = Image.open(BytesIO(response.content))
+    img.paste(imageToPaste, (7,7))
+    imgTitle = Image.open(pathToScript+"titlebar.png")
+    imgTitle = imgTitle.convert("RGBA")
+    img.paste(imgTitle, (335,7), imgTitle)
+    imgXgp = Image.open(pathToScript+'xgp.png')
+    imgXgp = imgXgp.convert("RGBA")
+    imgGfnow = Image.open(pathToScript+'gfnow.png')
+    imgGfnow = imgGfnow.convert("RGBA")
+    imgYes = Image.open(pathToScript+'yes.png')
+    imgYes = imgYes.convert("RGBA")
+    imgNo = Image.open(pathToScript+"no.png")
+    imgNo = imgNo.convert("RGBA")
+    img.paste(imgXgp, (355,110), imgXgp)
+    #yes or no
+    if str(gamepass) == "yes":
+        img.paste(imgYes, (490,110), imgYes)
+    else:
+        img.paste(imgNo, (490,110), imgNo)
+    img.paste(imgGfnow,(355,150), imgGfnow)
+    if str(gfnow) == "yes":
+        img.paste(imgYes, (490,150), imgYes)
+    else:
+        img.paste(imgNo, (490, 150), imgNo)
+    #Write text  to image
+    if len(prettyName) > 25:
+        if len(prettyName) > 35:
+            prettyName = prettyName[0:33]+"..."
+        titleFont = smallfont
+        margin = 13
+        charwidth = 3
+    elif len(prettyName) > 20:
+        titleFont = mainfont
+        margin = 10
+        charwidth = 4
+    else:
+        titleFont = bigfont
+        margin = 8
+        charwidth = 5
+    imgDraw.text((450-len(prettyName)*charwidth,5+margin), prettyName, font=titleFont, fill=(0,0,0))
+    imgDraw.text((448-len(prettyName)*charwidth,3+margin), prettyName, font=titleFont, fill=(255,255,255))
+    imgDraw.text((355,42), "Official:", font=mainfont, fill=(255,255,255))
+    imgDraw.text((355,65), "Keyshops:", font=mainfont, fill=(255,255,255))
+    imgDraw.text((355,90), "Historical low", font=smallfont, fill=(100,100,100))
+    imgDraw.text((450,40), ofi, font=bigfont, fill=(150,255,5))
+    imgDraw.text((450,63), key, font=bigfont, fill=(50,200,250))
+    imgDraw.text((451,40), ofi, font=bigfont, fill=(150,255,5))
+    imgDraw.text((451,63), key, font=bigfont, fill=(50,200,250))
+    imgDraw.text((450,85), his, font=mainfont, fill=(200,200,200))
+    #Save image
+    executionTime=str(round(datetime.now().timestamp() - startTime.timestamp(),2))
+    imgDraw.text((1,188), "Generated in ~"+str(executionTime)+" seconds by qBot on "+str(datetime.now())[0:-7]+". Long live Slav Squat Squad!", font=smallfont, fill=(25,25,25))
+    img.save(pathToScript+'price.png', quality=95)
+    urlFile = open(pathToScript+"url.temp","w+")
+    urlFile.write("<"+ggUrl.replace("\n","")+">")
+    print("<"+ggUrl.replace("\n","")+">")
+    urlFile.close()
+
+
+
 inputName = str(sys.argv[1])
-if inputName == "Vyqe":
-    print("Our glorious leader is priceless. How dare you.")
-    exit(0)
-if "Pribo" in inputName:
-    print("Worthless.")
-    exit(0)
-if "Vaida" in inputName:
-    print("Half of Galcia, according to Twitch.")
-    exit(0)
-if "Galcia" in inputName:
-    print("10k GBP. Hahaha")
-    exit(0)
-#print("X1:"+str(inputName))
+
+#if inputName == "Vyqe":
+#    print("Our glorious leader is priceless. How dare you.")
+#    exit(0)
+#if "Pribo" in inputName:
+#    print("Worthless.")
+#    exit(0)
+#if "Vaida" in inputName:
+#    print("Half of Galcia, according to Twitch.")
+#    exit(0)
+#if "Galcia" in inputName:
+#    print("10k GBP. Hahaha")
+#    exit(0)
 siteurl = buildSiteUrl(str(inputName))
 if printPrices(str(inputName), getElementFromSite(siteurl, "a", "class", "game-price-anchor-link"), siteurl) == 1:
-    newName = getSimilarName(str(inputName))
-    newUrl = buildSiteUrl(newName)
-    #print("<"+newUrl+">")
-    #print("newName: "+newName)
-    printPrices(newName, getElementFromSite(newUrl, "a", "class", "game-price-anchor-link"), newUrl)
-
-#print("\n\n===========================\n")
-
-#html = open(htmlname, encoding="utf8", errors='ignore')
-#soup = BeautifulSoup(html, 'html.parser')
-#lines = soup.find_all("span", {"class" : "numeric"}) #"game-price-current"})
-#if len(lines) > 3:
-#    lines = str(lines[:3]).replace("<span class=\"numeric\">","\n").replace("[","").replace("]","").replace("</span>","")
-#    lines = lines.split("\n")
-#    print("Official stores: "+str(lines[1].split("\\")[0])+"€")
-#    print("Keyshops: "+str(lines[2].split("\\")[0])+"€")
-#    print("Historical low: "+str(lines[3].split("\\")[0])+"€")
-#else:
-#    print("Game not found, searching for a similar game")
-#    gameName = gameName.replace("-","+")
-#    siteurl='https://gg.deals/games/?title='+gameName
-#    r = requests.get(siteurl, allow_redirects=True)
-#    f = open(htmlname, 'w+')
-#    f.write(str(r.content))
-#    f.close()
-#    html = open(htmlname, encoding="utf8", errors='ignore')
-#    soup = BeautifulSoup(html, 'html.parser')
-#    lines = soup.find_all("a", {"class" : "title-inner"})#"game-info-title title"})
-#    lines = str(lines).replace("<div","\n")
-#    lines = lines.split(">")[1].split("<")[0]
-#    print(lines)
-
+    prettyName = getSimilarName(str(inputName))[0]
+    newName = getSimilarName(str(inputName))[1]
+    siteurl = buildSiteUrl(newName)
+    #print("in:"+inputName)
+    #print("pn:"+prettyName)
+    #print("nn:"+newName)
+    printPrices(prettyName, getElementFromSite(siteurl, "a", "class", "game-price-anchor-link"), siteurl)
+#print("IN:"+inputName)
+generateImage(siteurl)
