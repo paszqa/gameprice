@@ -1,3 +1,4 @@
+# This Python file uses the following encoding: utf-8
 import requests
 from bs4 import BeautifulSoup
 import os
@@ -13,12 +14,26 @@ def getElementFromSite(site, elementName, elementAttributeName, elementAttribute
     html = open(pathToScript+'temp.html', encoding="utf8", errors='ignore')
     soup = BeautifulSoup(html, 'html.parser')
     #lines = soup.find_all("span", {"class" : "numeric"}) #"game-price-current"})
-    lines = soup.find_all("a", {"class" : "game-price-anchor-link"})
+    #lines = soup.find_all("a", {"class" : "game-price-anchor-link"})
+    lines = soup.find_all(elementName, { elementAttributeName : elementAttribute})
     #print("-------------")
     #print(str(site))
     #print(str(lines))
     #print("=============")
     return lines
+
+def checkGamePass(inputLines):
+    if len(inputLines) > 0:
+        gamePass = 0
+        for line in inputLines:
+            if "Included with Xbox Game Pass for PC" in str(line):
+                gamePass = 1
+        if gamePass == 1:
+            print("Available in GamePass PC")
+        else:
+            print("Not in GamePass PC")
+    else:
+        print("Not in GamePass PC")
 
 def printPrices(currentName, inputLines, siteurl):
     #print("---inputLines: "+str(inputLines[:3]))
@@ -30,6 +45,7 @@ def printPrices(currentName, inputLines, siteurl):
         officialPrice = "-"
         foundOfficial = 0
         keyshopPrice = "-"
+        gamePass = 0
         historicalLow = "1000000000"
         #Find first line with price
         #print(str(inputLines)
@@ -60,9 +76,14 @@ def printPrices(currentName, inputLines, siteurl):
             elif "histor" in str(line) and "numeric" in str(line) and hisNotFound != 0:
                 #print("HISTOR:"+str(line))
                 newCandidate = str(line).split('<span class="numeric">')[1].split("\\")[0]
-                if float(newCandidate.replace(",",".").replace("~","")) < float(historicalLow.replace(",",".").replace("~","")):
-                    historicalLow = newCandidate
+                if "Free" not in str(newCandidate) and "Free" not in str(historicalLow):
+                    if float(newCandidate.replace(",",".").replace("~","")) < float(historicalLow.replace(",",".").replace("~","")):
+                        historicalLow = newCandidate
+                else:
+                    historicalLow = "Free"
                 hisNotFound -= 1
+#            elif "Included with Xbox Game Pass for PC" in str(line):
+#                gamePass = 1
             x+=1
         #print("-------------------------------------")
         
@@ -72,7 +93,7 @@ def printPrices(currentName, inputLines, siteurl):
         #    officialPrice = "n/a"
         #else:
         #    print("X101: Not found UNAVAILABLE IN:\n"+inputLines[0]+"\n")
-        #    officialPrice = inputLines[1].split("\\")[0]+"€"
+        #    officialPrice = inputLines[1].split("\")[0]+""
         #    foundOfficial = 1
         #If found official price
         #if foundOfficial == 1:
@@ -102,18 +123,26 @@ def printPrices(currentName, inputLines, siteurl):
         #print("=4=4=4==4=4=4=4=4=4==4=4=4==4=4==4=4=")
         print("Game: "+currentName)
         print("<"+siteurl+">")
-        if officialPrice != "Unavailable":
+        if officialPrice != "Unavailable" and "Free" not in str(officialPrice):
             officialPrice += "€"
         if keyshopPrice != "Unavailable":
             keyshopPrice += "€"
         if historicalLow != "Unavailable":
-            if float(historicalLow.replace(",",".").replace("~","")) > 10000:
-                historicalLow = "Unavailable"
-        if historicalLow != "Unavailable":
+            if "Free" not in str(historicalLow):
+                if float(historicalLow.replace(",",".").replace("~","")) > 10000:
+                    historicalLow = "Unavailable"
+            else:
+                historicalLow = "Free"
+        if historicalLow != "Unavailable" and "Free" not in str(historicalLow):
             historicalLow += "€"
         print("Official: "+str(officialPrice))
         print("Keyshops: "+str(keyshopPrice))
         print("Historical low: "+str(historicalLow))
+        checkGamePass(getElementFromSite(siteurl, "span", "class", "game-info-title title no-icons"))
+#        if gamePass == 1:
+#            print("Available in GamePass.")
+#        else:
+#            print("Not in GamePass.")
         #getImageUrl(siteurl)
         #if len(inputLines) > 1:
         #    print("Official: "+str(inputLines[1].split("\\")[0])+"€")
@@ -130,6 +159,7 @@ def printPrices(currentName, inputLines, siteurl):
 
 def getSimilarName(inputName):
     #print("Game not found, searching for a similar game")
+    gameName=fixName(inputName)
     gameName = inputName.replace(" - ","-").replace("---","-").replace("-","+")
     siteurl='https://gg.deals/games/?title='+gameName
     r = requests.get(siteurl, allow_redirects=True)
@@ -142,19 +172,40 @@ def getSimilarName(inputName):
     lines = str(lines).replace("<div","\n")
     lines = lines.split(">")[1].split("<")[0]
     print("Exact game name not found, similar name: "+lines)
+    lines = soup.find_all("a", {"class" : "full-link"})
+    lines = str(lines).replace("</a>","\n").replace('<a class="full-link" href="','').split("\n")[0].split("/")[2]
+    #print(str(lines))
+    
+    #print("-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=")
     return lines
 
 def buildSiteUrl(inputName):
 #    gameName=sys.argv[1]
     #print("Input name: "+str(inputName))
-    gameName=str(inputName).replace(" - ","-")
+    gameName=fixName(inputName)#str(inputName).replace(" - ","-")
+    #gameName=gameName.replace(" and ","")
+    #gameName=gameName.replace("&","")
+    #gameName=gameName.replace("'","-")
     #print("Input name2: "+str(inputName))
-    gameName=str(inputName).replace(" ","-").replace("---","-")
-    gameName=str(gameName).replace(":","").replace("/","").replace("+","")
+    #gameName=str(inputName).replace(" ","-").replace("---","-")
+    #gameName=str(gameName).replace(":","").replace("/","").replace("+","")
     #print("Game name: "+str(gameName))
     siteurl='https://gg.deals/eu/region/switch/?return=%2Fgame%2F'+str(gameName)+'%2F&showKeyshops=1'
     #print("Site URL: "+siteurl)
     return siteurl
+
+def fixName(inputName):
+    #print("A:"+str(inputName))
+    gameName=str(inputName).replace(" - ","-")
+    gameName=gameName.replace(" and ","")
+    gameName=gameName.replace("&amp;","").replace("  "," ")
+    gameName=gameName.replace("&","").replace("  "," ")
+    gameName=str(gameName).replace('\'','-')
+    gameName=str(gameName).replace(" ","-").replace("---","-").replace("   "," ").replace("  "," ").replace("  "," ")
+    gameName=str(gameName).replace(":","").replace("/","").replace("+","")
+    gameName=gameName.replace("&&amp;","").replace("  "," ")
+    #print("B:"+str(gameName))
+    return gameName
 
 def getImageUrl(siteurl):
     r = requests.get(siteurl, allow_redirects=True)
@@ -185,14 +236,26 @@ def getImageUrl(siteurl):
 #htmlname='site.html'
 #print("------------")
 inputName = str(sys.argv[1])
+if inputName == "Vyqe":
+    print("Our glorious leader is priceless. How dare you.")
+    exit(0)
+if "Pribo" in inputName:
+    print("Worthless.")
+    exit(0)
+if "Vaida" in inputName:
+    print("Half of Galcia, according to Twitch.")
+    exit(0)
+if "Galcia" in inputName:
+    print("10k GBP. Hahaha")
+    exit(0)
 #print("X1:"+str(inputName))
 siteurl = buildSiteUrl(str(inputName))
-if printPrices(str(inputName), getElementFromSite(siteurl, "span", "class", "numeric"), siteurl) == 1:
+if printPrices(str(inputName), getElementFromSite(siteurl, "a", "class", "game-price-anchor-link"), siteurl) == 1:
     newName = getSimilarName(str(inputName))
     newUrl = buildSiteUrl(newName)
     #print("<"+newUrl+">")
     #print("newName: "+newName)
-    printPrices(newName, getElementFromSite(newUrl, "span", "class", "numeric"), newUrl)
+    printPrices(newName, getElementFromSite(newUrl, "a", "class", "game-price-anchor-link"), newUrl)
 
 #print("\n\n===========================\n")
 
